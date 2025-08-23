@@ -43,6 +43,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- Helpers for input normalization and safe sending ---
+def _norm_code(s: str) -> str:
+    if s is None:
+        return ""
+    # remove common invisible spaces, trim, uppercase
+    s = str(s).replace("\u00A0", "").replace("\u200B", "").strip().upper()
+    return s
+
+async def send_safely(update: Update, text: str, max_len: int = 3500):
+    """Split and send long messages under Telegram's 4096-char limit."""
+    if not text:
+        await update.message.reply_text("No details.")
+        return
+    parts = []
+    current = []
+    size = 0
+    for line in str(text).splitlines():
+        add = len(line) + 1  # include newline
+        if size + add > max_len:
+            parts.append("\n".join(current))
+            current = [line]
+            size = add
+        else:
+            current.append(line)
+            size += add
+    if current:
+        parts.append("\n".join(current))
+    for p in parts:
+        await update.message.reply_text(p)
+
+
 # Bot texts
 WELCOME_TEXT = (
     "🤖 مرحبًا بك في المساعد الآلي \"مرشد\"\n"
@@ -128,7 +159,8 @@ async def course_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return COURSE_INQUIRY
 
 async def inquiry_course(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = update.message.text
+    query_code = _norm_code(text)
     if text == '⬅️ رجوع':
         return await start(update, context)
 
@@ -140,14 +172,14 @@ async def inquiry_course(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return CHOOSING_MENU
 
     try:
-        df = pd.read_excel(COURSE_XLSX)
+        df = pd.read_excel(COURSE_XLSX, engine='openpyxl', dtype=str)
         # Detect columns
         def find_col(keywords):
             return next((c for c in df.columns if any(k in c.lower() for k in keywords)), None)
 
         code_col = find_col(['code', 'رمز']) or df.columns[0]
         crn_col = find_col(['crn', 'مرجعي', 'reference', 'الرقم'])
-        df[code_col] = df[code_col].astype(str).str.upper()
+        df[code_col] = df[code_col].astype(str).apply(_norm_code)
         user_code = text.upper()
         matched = df[df[code_col] == user_code]
         if matched.empty:
@@ -172,7 +204,8 @@ async def inquiry_course(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             messages.append(msg)
         full_msg = "\n\n".join(messages)
-        await update.message.reply_text(full_msg, reply_markup=build_main_keyboard())
+        await send_safely(update, full_msg)
+        await update.message.reply_text("⬅️ الرجوع للقائمة", reply_markup=build_main_keyboard())
     except Exception as e:
         logger.error(f"Error in inquiry_course: {e}")
         await update.message.reply_text(

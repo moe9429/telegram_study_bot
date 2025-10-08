@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import logging
 import pandas as pd
@@ -12,11 +13,36 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 
-# Load bot token from .env
+# ========= Config =========
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Conversation states
+COURSE_XLSX = "course_details.xlsx"
+PDF_FOLDER = "pdfs"
+
+# Student Services
+SERVICE_FILES = [
+    "خطوات الانسحاب من مقرر.pdf",
+    "خطوات التسجيل في مقرر.pdf",
+    "طلب تسجيل مقرر عن طريق منصه الارشاد.pdf",
+]
+
+# Cooperative Training
+COOP_FILES = [
+    "دليل التدريب التعاوني.pdf",
+    "نموذج خطاب جهة التدريب.pdf",
+    "نموذج تقييم الطالب.pdf",
+    "نموذج تقرير التدريب.pdf",
+]
+
+# Executive Programs (single plan each)
+EXEC_PROGRAM_FILES = {
+    "EMBA": "EMBA.pdf",
+    "EHRM": "EHRM.pdf",
+    "ENPO": "ENPO.pdf",
+}
+
+# ========= States =========
 (
     CHOOSING_MENU,
     SELECT_MAJOR,
@@ -25,98 +51,69 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
     SERVICE_MENU,
     DESC_MAJOR,
     DESC_YEAR,
-) = range(7)
+    COOP_MENU,
+) = range(8)
 
-# File paths and lists
-COURSE_XLSX = "course_details.xlsx"
-PDF_FOLDER = "pdfs"
-SERVICE_FILES = [
-    "خطوات الانسحاب من مقرر.pdf",
-    "خطوات التسجيل في مقرر.pdf",
-    "طلب تسجيل مقرر عن طريق منصه الارشاد.pdf"
-]
-
-# Logging configuration
+# ========= Logging =========
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Helpers for input normalization and safe sending ---
-def _norm_code(s: str) -> str:
-    if s is None:
-        return ""
-    # remove common invisible spaces, trim, uppercase
-    s = str(s).replace("\u00A0", "").replace("\u200B", "").strip().upper()
-    return s
-
-async def send_safely(update: Update, text: str, max_len: int = 3500):
-    """Split and send long messages under Telegram's 4096-char limit."""
-    if not text:
-        await update.message.reply_text("No details.")
-        return
-    parts = []
-    current = []
-    size = 0
-    for line in str(text).splitlines():
-        add = len(line) + 1  # include newline
-        if size + add > max_len:
-            parts.append("\n".join(current))
-            current = [line]
-            size = add
-        else:
-            current.append(line)
-            size += add
-    if current:
-        parts.append("\n".join(current))
-    for p in parts:
-        await update.message.reply_text(p)
-
-
-# Bot texts
+# ========= UI Text =========
 WELCOME_TEXT = (
-    "🤖 مرحبًا بك في المساعد الآلي \"مرشد\"\n"
-    "📍 قسم الإدارة ونظم المعلومات - جامعة حائل\n"
-    "🧾 يمكنك الاستفادة من الخدمات التالية:\n"
-    "1️⃣ الخطة الدراسية\n"
-    "2️⃣ تفاصيل المقررات\n"
-    "3️⃣ دليل خدمات الطالب\n"
-    "4️⃣ مكاتب أعضاء هيئة التدريس\n"
-    "📝 وصف المقرات\n"
-    "يرجى اختيار خيار:"
+    "🤖 مرحبًا بك في المساعد الآلي \"مرشد\"\\n"
+    "📍 كلية إدارة الأعمال - جامعة حائل\\n\\n"
+    "💼 الخدمات المتاحة:\\n"
+    "1. الخطة الدراسية\\n"
+    "2. تفاصيل المقررات\\n"
+    "3. دليل خدمات الطالب\\n"
+    "4. مكاتب أعضاء هيئة التدريس\\n"
+    "5. وصف المقررات\\n"
+    "6. التدريب التعاوني\\n\\n"
+    "📌 اختر الخدمة من القائمة أدناه:"
 )
 
-goodbye_text = (
-    "📌 شكراً لاستخدامك المساعد الآلي مرشد.\n"
-    "اكتب /start للعودة."
+GOODBYE_TEXT = (
+    "📌 شكرًا لاستخدامك المساعد الآلي \"مرشد\".\\n"
+    "اكتب /start للعودة إلى القائمة الرئيسية."
 )
 
 def build_main_keyboard():
     keyboard = [
         ["📒 الخطة الدراسية"],
         ["📖 تفاصيل المقررات"],
-        ["3️⃣ دليل خدمات الطالب"],
-        ["4️⃣ مكاتب أعضاء هيئة التدريس"],
-        ["📝 وصف المقرات"],
+        ["📂 دليل خدمات الطالب"],
+        ["🏢 مكاتب أعضاء هيئة التدريس"],
+        ["📝 وصف المقررات"],
+        ["🤝 التدريب التعاوني"],
         ["✅ إنهاء"],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Start handler
+# ========= Handlers =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(WELCOME_TEXT, reply_markup=build_main_keyboard())
     return CHOOSING_MENU
 
-# ===== الخطة الدراسية =====
+# ---- Study Plan (5 UG majors + 3 Executive programs) ----
 async def study_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        ["MIS - نظم معلومات ادارية"],
+        # Undergraduate majors
+        ["MIS - نظم معلومات إدارية"],
         ["MGT - إدارة"],
+        ["FIN - المالية والاقتصاد"],
+        ["ACC - المحاسبة"],
+        ["MKT - التسويق"],
+        # Executive master's (single plan each)
+        ["EMBA - ماجستير إدارة الأعمال التنفيذي"],
+        ["EHRM - ماجستير إدارة الموارد البشرية التنفيذي"],
+        ["ENPO - ماجستير إدارة المنظمات غير الربحية التنفيذي"],
         ["⬅️ رجوع"],
     ]
     await update.message.reply_text(
-        "اختر التخصص:",
+        "اختر التخصص أو البرنامج:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
     )
     return SELECT_MAJOR
@@ -126,10 +123,25 @@ async def select_major(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "⬅️ رجوع":
         return await start(update, context)
 
-    context.user_data['major'] = text.split(" - ")[0]
+    # Major/program code = first token before " - "
+    code = text.split(" - ")[0].strip()
+    context.user_data['major'] = code
+
+    # If executive program: send its single plan immediately
+    if code in EXEC_PROGRAM_FILES:
+        filename = EXEC_PROGRAM_FILES[code]
+        path = os.path.join(PDF_FOLDER, filename)
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                await update.message.reply_document(f, filename=filename)
+        else:
+            await update.message.reply_text("⚠️ ملف الخطة غير موجود.")
+        return await start(update, context)
+
+    # Otherwise: proceed with year selection (UG majors)
     keyboard = [["2024"], ["2021"], ["2020"], ["⬅️ رجوع"]]
     await update.message.reply_text(
-        f"التخصص: {text}\nاختر السنة:",
+        f"التخصص: {text}\\nاختر السنة:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
     )
     return SELECT_YEAR
@@ -140,7 +152,7 @@ async def select_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await study_plan(update, context)
 
     major = context.user_data.get('major')
-    filename = f"{major}{text}.pdf"  # e.g. MIS2021.pdf
+    filename = f"{major}{text}.pdf"  # e.g., FIN2024.pdf
     path = os.path.join(PDF_FOLDER, filename)
 
     if os.path.exists(path):
@@ -150,7 +162,7 @@ async def select_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ ملف الخطة غير موجود.")
     return await start(update, context)
 
-# ===== تفاصيل المقررات =====
+# ---- Course Details ----
 async def course_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✍️ أرسل رمز المقرر (مثال: MIS101):",
@@ -159,72 +171,61 @@ async def course_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return COURSE_INQUIRY
 
 async def inquiry_course(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    query_code = _norm_code(text)
+    text = update.message.text.strip()
     if text == '⬅️ رجوع':
         return await start(update, context)
 
     if not os.path.exists(COURSE_XLSX):
-        await update.message.reply_text(
-            "⚠️ ملف تفاصيل المقررات غير موجود.",
-            reply_markup=build_main_keyboard(),
-        )
+        await update.message.reply_text("⚠️ ملف تفاصيل المقررات غير موجود.", reply_markup=build_main_keyboard())
         return CHOOSING_MENU
 
     try:
-        df = pd.read_excel(COURSE_XLSX, engine='openpyxl', dtype=str)
-        # Detect columns
-        def find_col(keywords):
-            return next((c for c in df.columns if any(k in c.lower() for k in keywords)), None)
+        df = pd.read_excel(COURSE_XLSX)
 
+        def find_col(keys):
+            return next((c for c in df.columns if any(k in c.lower() for k in keys)), None)
+
+        # Try to auto-detect columns (Arabic or English headers)
         code_col = find_col(['code', 'رمز']) or df.columns[0]
         crn_col = find_col(['crn', 'مرجعي', 'reference', 'الرقم'])
-        df[code_col] = df[code_col].astype(str).apply(_norm_code)
-        user_code = text.upper()
-        matched = df[df[code_col] == user_code]
+        building_col = find_col(['bldg', 'مبنى'])
+        section_col = find_col(['section', 'شعبة'])
+        time_col = find_col(['time', 'وقت'])
+        days_col = find_col(['day', 'يوم'])
+        room_col = find_col(['room', 'قاعة'])
+
+        df[code_col] = df[code_col].astype(str).str.upper()
+        matched = df[df[code_col] == text.upper()]
         if matched.empty:
-            raise ValueError("Course not found")
+            raise ValueError("not found")
 
-        building_col = find_col(['bldg', 'مبنى']) or df.columns[1]
-        section_col = find_col(['section', 'شعبة']) or df.columns[2]
-        time_col = find_col(['time', 'وقت']) or df.columns[3]
-        days_col = find_col(['day', 'يوم']) or df.columns[4]
-        room_col = find_col(['room', 'قاعة']) or df.columns[5]
-
-        messages = []
+        rows = []
         for _, row in matched.iterrows():
-            crn_line = f"🔢 {crn_col}: {row[crn_col]}\n" if crn_col else ""
+            crn_line = f"🔢 الرقم المرجعي: {row[crn_col]}\\n" if crn_col else ""
             msg = (
-                f"{crn_line}✅ {code_col}: {row[code_col]}\n"
-                f"🔸 {section_col}: {str(row[section_col]).replace('.0','')}\n"
-                f"📅 {days_col}: {row[days_col]}\n"
-                f"🕒 {time_col}: {row[time_col]}\n"
-                f"🏢 {building_col}: {row[building_col]}\n"
-                f"📍 {room_col}: {row[room_col]}"
+                f"{crn_line}"
+                f"رمز المقرر: {row.get(code_col, '-')}\\n"
+                f"الشعبة: {str(row.get(section_col, '-')).replace('.0','')}\\n"
+                f"اليوم: {row.get(days_col, '-')}\\n"
+                f"الوقت: {row.get(time_col, '-')}\\n"
+                f"المبنى: {row.get(building_col, '-')}\\n"
+                f"القاعة: {row.get(room_col, '-')}"
             )
-            messages.append(msg)
-        full_msg = "\n\n".join(messages)
-        await send_safely(update, full_msg)
-        await update.message.reply_text("⬅️ الرجوع للقائمة", reply_markup=build_main_keyboard())
+            rows.append(msg)
+        await update.message.reply_text("\\n\\n".join(rows), reply_markup=build_main_keyboard())
     except Exception as e:
-        logger.error(f"Error in inquiry_course: {e}")
-        await update.message.reply_text(
-            "⚠️ لم أتمكن من العثور على المقرر. تحقق من الرمز وحاول مرة أخرى.",
-            reply_markup=build_main_keyboard(),
-        )
+        logger.error(f"inquiry_course error: {e}")
+        await update.message.reply_text("⚠️ لم يتم العثور على المقرر.", reply_markup=build_main_keyboard())
     return CHOOSING_MENU
 
-# ===== دليل خدمات الطالب =====
+# ---- Student Services ----
 async def service_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     manuals = [f for f in SERVICE_FILES if os.path.exists(os.path.join(PDF_FOLDER, f))]
     if not manuals:
-        await update.message.reply_text("⚠️ لا توجد ملفات للخدمات.", reply_markup=build_main_keyboard())
+        await update.message.reply_text("⚠️ لا توجد ملفات متاحة حالياً.", reply_markup=build_main_keyboard())
         return CHOOSING_MENU
     keyboard = [[m] for m in manuals] + [["⬅️ رجوع"]]
-    await update.message.reply_text(
-        "اختر خدمة:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
-    )
+    await update.message.reply_text("اختر الخدمة:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     return SERVICE_MENU
 
 async def send_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -239,76 +240,34 @@ async def send_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ الملف غير موجود.", reply_markup=build_main_keyboard())
     return CHOOSING_MENU
 
-# ===== مكاتب أعضاء هيئة التدريس =====
-async def faculty_offices(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    path = os.path.join(PDF_FOLDER, "office_number.pdf")
+# ---- Cooperative Training ----
+async def cooperative_training(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    files = [f for f in COOP_FILES if os.path.exists(os.path.join(PDF_FOLDER, f))]
+    if not files:
+        await update.message.reply_text("⚠️ لا توجد ملفات للتدريب التعاوني.", reply_markup=build_main_keyboard())
+        return CHOOSING_MENU
+    keyboard = [[f] for f in files] + [["⬅️ رجوع"]]
+    await update.message.reply_text("اختر المستند المطلوب:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    return COOP_MENU
+
+async def send_coop_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = update.message.text
+    if choice == "⬅️ رجوع":
+        return await start(update, context)
+    path = os.path.join(PDF_FOLDER, choice)
     if os.path.exists(path):
         with open(path, 'rb') as f:
-            await update.message.reply_document(f, filename="office_number.pdf")
+            await update.message.reply_document(f, filename=choice)
     else:
-        await update.message.reply_text("⚠️ ملف مكتب هيئة التدريس غير موجود.", reply_markup=build_main_keyboard())
+        await update.message.reply_text("⚠️ الملف غير موجود.", reply_markup=build_main_keyboard())
     return CHOOSING_MENU
 
-# ===== 📝 وصف المقرات =====
-async def describe_courses(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["نظم المعلومات"], ["الإدارة"], ["⬅️ رجوع"]]
-    await update.message.reply_text(
-        "اختر المسار:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
-    )
-    return DESC_MAJOR
-
-async def desc_select_major(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "⬅️ رجوع":
-        return await start(update, context)
-    context.user_data['desc_major'] = 'MIS' if 'نظم' in text else 'MGT'
-
-    keyboard = [["خطة 2024"], ["خطة 2021-2022-2023"], ["خطة 2020"], ["⬅️ رجوع"]]
-    await update.message.reply_text(
-        f"المسار: {text}\nاختر الخطة:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
-    )
-    return DESC_YEAR
-
-async def desc_select_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "⬅️ رجوع":
-        return await describe_courses(update, context)
-
-    major = context.user_data.get('desc_major')  # MIS or MGT
-    # Map choices to filenames
-    mapping = {
-        ('MIS', 'خطة 2024'): 'MisC2024.pdf',
-        ('MIS', 'خطة 2021-2022-2023'): 'MisC2021.pdf',
-        ('MIS', 'خطة 2020'): 'MisC2020.pdf',
-        ('MGT', 'خطة 2024'): 'MgtC2024.pdf',  # NOTE: add this file if available
-        ('MGT', 'خطة 2021-2022-2023'): 'MgtC2021.pdf',
-        ('MGT', 'خطة 2020'): 'MgtC2020.pdf',
-    }
-    filename = mapping.get((major, text))
-    if not filename:
-        await update.message.reply_text("⚠️ لم يتم العثور على الملف المطلوب.")
-        return await start(update, context)
-
-    path = os.path.join(PDF_FOLDER, filename)
-    if os.path.exists(path):
-        with open(path, 'rb') as f:
-            await update.message.reply_document(f, filename=filename)
-    else:
-        await update.message.reply_text("⚠️ الملف غير موجود في مجلد pdfs.")
-    return await start(update, context)
-
-# End handler
+# ---- End ----
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(goodbye_text)
+    await update.message.reply_text(GOODBYE_TEXT)
     return ConversationHandler.END
 
-# Unknown handler
-async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await start(update, context)
-
-# Main function
+# ---- Main ----
 if __name__ == '__main__':
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -318,18 +277,17 @@ if __name__ == '__main__':
             CHOOSING_MENU: [
                 MessageHandler(filters.Regex('^📒 الخطة الدراسية$'), study_plan),
                 MessageHandler(filters.Regex('^📖 تفاصيل المقررات$'), course_details),
-                MessageHandler(filters.Regex('^3️⃣ دليل خدمات الطالب$'), service_manual),
-                MessageHandler(filters.Regex('^4️⃣ مكاتب أعضاء هيئة التدريس$'), faculty_offices),
-                MessageHandler(filters.Regex('^📝 وصف المقرات$'), describe_courses),
+                MessageHandler(filters.Regex('^📂 دليل خدمات الطالب$'), service_manual),
+                MessageHandler(filters.Regex('^🏢 مكاتب أعضاء هيئة التدريس$'), send_manual),
+                MessageHandler(filters.Regex('^📝 وصف المقررات$'), send_manual),
+                MessageHandler(filters.Regex('^🤝 التدريب التعاوني$'), cooperative_training),
                 MessageHandler(filters.Regex('^✅ إنهاء$'), end),
-                MessageHandler(filters.ALL, unknown),
             ],
             SELECT_MAJOR: [MessageHandler(filters.ALL, select_major)],
             SELECT_YEAR: [MessageHandler(filters.ALL, select_year)],
             COURSE_INQUIRY: [MessageHandler(filters.ALL, inquiry_course)],
             SERVICE_MENU: [MessageHandler(filters.ALL, send_manual)],
-            DESC_MAJOR: [MessageHandler(filters.ALL, desc_select_major)],
-            DESC_YEAR: [MessageHandler(filters.ALL, desc_select_year)],
+            COOP_MENU: [MessageHandler(filters.ALL, send_coop_doc)],
         },
         fallbacks=[CommandHandler('start', start)],
     )
